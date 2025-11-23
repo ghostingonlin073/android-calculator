@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:  # Позволяет запускать вручную
+  workflow_dispatch:
 
 jobs:
   build-apk:
@@ -15,9 +15,7 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        
+      
     - name: Set up Python 3.9
       uses: actions/setup-python@v4
       with:
@@ -38,43 +36,62 @@ jobs:
           zlib1g-dev \
           libncurses5-dev \
           libncursesw5-dev \
-          libtinfo5 \
+          libtinfo6 \          # ⭐ ИЗМЕНЕНО: libtinfo5 на libtinfo6
           cmake \
           libffi-dev \
           libssl-dev \
           curl \
           wget
           
-    - name: Install Buildozer
+    - name: Install Buildozer and dependencies
       run: |
         pip install --upgrade pip
         pip install buildozer
         pip install Cython==0.29.33
+        pip install virtualenv
         
-    - name: Install Android SDK
+    - name: Setup Android SDK
       run: |
-        wget https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
         mkdir -p android-sdk/cmdline-tools
-        unzip commandlinetools-linux-8512546_latest.zip -d android-sdk/cmdline-tools
+        unzip -q commandlinetools-linux-8512546_latest.zip -d android-sdk/cmdline-tools
         mv android-sdk/cmdline-tools/cmdline-tools android-sdk/cmdline-tools/latest
-        echo "$(pwd)/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-        echo "export ANDROID_SDK_ROOT=$(pwd)/android-sdk" >> $GITHUB_ENV
+        
+        # Устанавливаем переменные окружения
+        echo "ANDROID_SDK_ROOT=$PWD/android-sdk" >> $GITHUB_ENV
+        echo "PATH=$PWD/android-sdk/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
         
     - name: Accept Android licenses
       run: |
-        yes | android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        yes | $PWD/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
         
     - name: Initialize Buildozer
       run: |
-        buildozer init
-        ls -la
+        # Создаем минимальный buildozer.spec если его нет
+        if [ ! -f "buildozer.spec" ]; then
+          buildozer init
+        fi
+        echo "✅ Buildozer ready"
         
-    - name: Build APK (Debug)
+    - name: Build APK with Buildozer
+      timeout-minutes: 30
       run: |
+        # Устанавливаем переменные для ускорения сборки
+        export BUILD_OMP_NUM_THREADS=2
+        export BUILD_MAX_JOBS=2
+        
+        # Собираем APK
         buildozer -v android debug
-        ls -la bin/
+        
+    - name: List build artifacts
+      if: success()
+      run: |
+        echo "📁 Build artifacts:"
+        ls -la bin/ || echo "No bin directory"
+        find . -name "*.apk" -o -name "*.aab" | head -10
         
     - name: Upload APK artifact
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: calculator-apk
@@ -82,21 +99,10 @@ jobs:
         retention-days: 30
         
     - name: Upload build logs
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build-logs
         path: |
           .buildozer/
-          buildozer.spec
         retention-days: 7
-        
-    - name: Create GitHub Release (on tag)
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: bin/*.apk
-        body: |
-          Автоматически собранный APK файл калькулятора
-          
-          Сборка выполнена: ${{ github.event.head_commit.timestamp }}
-          Коммит: ${{ github.sha }}
