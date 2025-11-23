@@ -1,0 +1,102 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Позволяет запускать вручную
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git \
+          zip \
+          unzip \
+          openjdk-11-jdk \
+          python3-pip \
+          autoconf \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo5 \
+          cmake \
+          libffi-dev \
+          libssl-dev \
+          curl \
+          wget
+          
+    - name: Install Buildozer
+      run: |
+        pip install --upgrade pip
+        pip install buildozer
+        pip install Cython==0.29.33
+        
+    - name: Install Android SDK
+      run: |
+        wget https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
+        mkdir -p android-sdk/cmdline-tools
+        unzip commandlinetools-linux-8512546_latest.zip -d android-sdk/cmdline-tools
+        mv android-sdk/cmdline-tools/cmdline-tools android-sdk/cmdline-tools/latest
+        echo "$(pwd)/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        echo "export ANDROID_SDK_ROOT=$(pwd)/android-sdk" >> $GITHUB_ENV
+        
+    - name: Accept Android licenses
+      run: |
+        yes | android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        
+    - name: Initialize Buildozer
+      run: |
+        buildozer init
+        ls -la
+        
+    - name: Build APK (Debug)
+      run: |
+        buildozer -v android debug
+        ls -la bin/
+        
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: calculator-apk
+        path: bin/*.apk
+        retention-days: 30
+        
+    - name: Upload build logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: |
+          .buildozer/
+          buildozer.spec
+        retention-days: 7
+        
+    - name: Create GitHub Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: bin/*.apk
+        body: |
+          Автоматически собранный APK файл калькулятора
+          
+          Сборка выполнена: ${{ github.event.head_commit.timestamp }}
+          Коммит: ${{ github.sha }}
